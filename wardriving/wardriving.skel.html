@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Mapa + Tabla</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            font-family: sans-serif;
+        }
+
+        .container {
+            display: flex;
+            height: 100%;
+            width: 100%;
+        }
+
+        .deteccion-insegura {
+            background-color: #8B0000 !important;
+            color: white;
+        }
+
+        .deteccion-insegura td {
+            background-color: transparent !important;
+            color: inherit;
+        }
+
+        #table-container {
+            width: 50%;
+            flex-shrink: 0;
+            min-width: 0;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+            background: #1a1a1a;
+            border-right: 1px solid #444;
+        }
+
+        #table-scroll {
+            overflow-y: auto;
+            flex: 1;
+            padding: 0;
+            margin: 0;
+        }
+
+        #marker-table thead th {
+            position: sticky;
+            top: 0;
+            background-color: #333;
+            z-index: 2;
+            border-top: 0;
+        }
+
+        #map-frame {
+            flex: 1;
+            min-width: 0;
+            height: 100%;
+            border: none;
+        }
+
+        /* Separador arrastrable entre tabla y mapa */
+        #separador {
+            flex: 0 0 6px;
+            cursor: col-resize;
+            background: #333;
+            touch-action: none;
+        }
+
+        #separador:hover,
+        #separador:focus-visible,
+        #separador.arrastrando {
+            background: #00a3cc;
+            outline: none;
+        }
+
+        /* Durante el arrastre el iframe no debe "comerse" los eventos del ratón */
+        body.redimensionando #map-frame {
+            pointer-events: none;
+        }
+
+        body.redimensionando {
+            cursor: col-resize;
+            user-select: none;
+        }
+
+        #marker-table {
+            width: 100%;
+            border-collapse: collapse;
+            color: white;
+            background-color: #222;
+            border-spacing: 0;
+        }
+
+        #marker-table th {
+            background-color: #333;
+            color: white;
+        }
+
+        #marker-table td {
+            background-color: #222;
+            border: 1px solid #444;
+        }
+
+        #marker-table tbody tr {
+            cursor: pointer;
+        }
+
+        #marker-table tbody tr:hover td {
+            background-color: #2e2e2e;
+        }
+
+        #marker-table tbody tr.seleccionada td {
+            background-color: #0b4f6c !important;
+        }
+
+        .ssid-oculta {
+            color: #888;
+            font-style: italic;
+        }
+
+        #filter-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background-color: #2a2a2a;
+            border-top: 1px solid #444;
+            color: white;
+        }
+
+        #filter-box input[type="text"] {
+            flex: 1;
+            padding: 6px;
+            background: #111;
+            color: white;
+            border: 1px solid #555;
+        }
+
+        #filter-box button {
+            padding: 6px 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="table-container">
+            <!-- Tabla con scroll -->
+            <div id="table-scroll">
+                <table id="marker-table">
+                    <thead>
+                        <tr>
+                            <th>MAC</th>
+                            <th>SSID</th>
+                            <th>AUTH</th>
+                            <th>LAT</th>
+                            <th>LONG</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Rellenado por JS -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Controles fijos abajo -->
+            <div id="filter-box">
+                <input type="text" id="search-input" placeholder="Buscar por MAC o SSID">
+                <label style="white-space: nowrap;">
+                    <input type="checkbox" id="insecure-checkbox">
+                    Inseguro
+                </label>
+                <button id="search-button">Buscar</button>
+            </div>
+        </div>
+
+        <!-- Separador: arrastrar para redimensionar, doble click para volver al 50 % -->
+        <div id="separador" role="separator" aria-orientation="vertical" tabindex="0"
+             title="Arrastra para redimensionar · doble click: 50 %"></div>
+
+        <!-- Mapa -->
+        <iframe id="map-frame" src="mapa.html"></iframe>
+    </div>
+    <script>
+    // Aquí va la variable tocha, poblada por python, por razones de seguridad del navegador no deja abrir archivos con fetch.
+        const detecciones = [ /* python llena el JSON aquí */ ];
+        // {mapa: nombre de la variable JS del mapa, marcadores: {nombreVariable: MAC}}
+        const enlaceMapa = { /* python llena el JSON aquí */ };
+
+        const porMac = new Map(detecciones.map(d => [d.MAC, d]));
+        let filasPorMac = new Map();
+        let macSeleccionada = null;
+        let resaltado = null;   // círculo que marca el punto seleccionado en el mapa
+
+        renderTable(detecciones);
+
+        // Se usa textContent en lugar de innerHTML: un SSID nunca se interpreta como HTML.
+        function renderTable(data) {
+            const tbody = document.querySelector('#marker-table tbody');
+            tbody.replaceChildren();
+            filasPorMac = new Map();
+
+            data.forEach(deteccion => {
+                const tr = document.createElement('tr');
+                if (deteccion.insegura === true) {
+                    tr.classList.add('deteccion-insegura');
+                }
+                if (deteccion.MAC === macSeleccionada) {
+                    tr.classList.add('seleccionada');
+                }
+                tr.addEventListener('click', () => {
+                    marcaFila(deteccion.MAC, false);
+                    irAlPunto(deteccion);
+                });
+                filasPorMac.set(deteccion.MAC, tr);
+                const celdas = [
+                    deteccion.MAC,
+                    deteccion.SSID,
+                    deteccion.AuthMode,
+                    deteccion.CurrentLatitude,
+                    deteccion.CurrentLongitude
+                ];
+                celdas.forEach((valor, idx) => {
+                    const td = document.createElement('td');
+                    if (idx === 1 && !valor) {
+                        td.textContent = '(oculta)';
+                        td.classList.add('ssid-oculta');
+                    } else {
+                        td.textContent = valor;
+                    }
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+        }
+
+        document.getElementById('search-button').addEventListener('click', () => {
+            const searchText = document.getElementById('search-input').value.trim().toLowerCase();
+            const insecureChecked = document.getElementById('insecure-checkbox').checked;
+
+            const filtered = detecciones.filter(m => {
+                const matchText = m.MAC.toLowerCase().includes(searchText) || (m.SSID || '').toLowerCase().includes(searchText);
+                const matchInsecure = !insecureChecked || (m.insegura === true);
+                return matchText && matchInsecure;
+            });
+
+            renderTable(filtered);
+        });
+
+        // Buscar al pulsar Enter en el input y al marcar/desmarcar la casilla
+        document.getElementById('search-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('search-button').click();
+            }
+        });
+        document.getElementById('insecure-checkbox').addEventListener('change', () => {
+            document.getElementById('search-button').click();
+        });
+
+        // ---- Separador redimensionable ----
+        (() => {
+            const separador = document.getElementById('separador');
+            const panel = document.getElementById('table-container');
+            const MIN_PX = 200;           // ancho mínimo de tabla y de mapa
+            const CLAVE = 'wardriving.anchoTabla';
+
+            // Aplica un ancho en % de la ventana, respetando los mínimos
+            function fijaAncho(porcentaje) {
+                const total = window.innerWidth;
+                const minPct = Math.min(50, MIN_PX / total * 100);
+                const pct = Math.min(100 - minPct, Math.max(minPct, porcentaje));
+                panel.style.width = pct + '%';
+                separador.setAttribute('aria-valuenow', Math.round(pct));
+                return pct;
+            }
+
+            function guarda(pct) {
+                try { localStorage.setItem(CLAVE, String(pct)); } catch (e) { /* sin almacenamiento */ }
+            }
+
+            // Recupera el último ancho usado
+            try {
+                const guardado = parseFloat(localStorage.getItem(CLAVE));
+                if (!isNaN(guardado)) fijaAncho(guardado);
+            } catch (e) { /* sin almacenamiento */ }
+
+            // Pointer capture: los eventos siguen llegando al separador aunque
+            // el ratón pase por encima del iframe del mapa
+            separador.addEventListener('pointerdown', (e) => {
+                separador.setPointerCapture(e.pointerId);
+                separador.classList.add('arrastrando');
+                document.body.classList.add('redimensionando');
+            });
+            separador.addEventListener('pointermove', (e) => {
+                if (!separador.hasPointerCapture(e.pointerId)) return;
+                fijaAncho(e.clientX / window.innerWidth * 100);
+            });
+            const termina = (e) => {
+                if (!separador.hasPointerCapture(e.pointerId)) return;
+                separador.releasePointerCapture(e.pointerId);
+                separador.classList.remove('arrastrando');
+                document.body.classList.remove('redimensionando');
+                guarda(parseFloat(panel.style.width));
+            };
+            separador.addEventListener('pointerup', termina);
+            separador.addEventListener('pointercancel', termina);
+
+            separador.addEventListener('dblclick', () => guarda(fijaAncho(50)));
+
+            // Teclado: flechas mueven 2 %, Inicio/Fin a los extremos
+            separador.addEventListener('keydown', (e) => {
+                const actual = parseFloat(panel.style.width) || 50;
+                const pasos = { ArrowLeft: actual - 2, ArrowRight: actual + 2, Home: 0, End: 100 };
+                if (e.key in pasos) {
+                    e.preventDefault();
+                    guarda(fijaAncho(pasos[e.key]));
+                }
+            });
+
+            // Si la ventana cambia de tamaño, revalida los mínimos
+            window.addEventListener('resize', () => fijaAncho(parseFloat(panel.style.width) || 50));
+        })();
+
+        // ---- Enlace tabla <-> mapa ----
+
+        // Devuelve {w: ventana del iframe, mapa: objeto L.Map} o null si aún no está listo
+        function mapaLeaflet() {
+            const w = document.getElementById('map-frame').contentWindow;
+            if (!w || !enlaceMapa.mapa || !w[enlaceMapa.mapa] || !w.L) return null;
+            return { w, mapa: w[enlaceMapa.mapa] };
+        }
+
+        // Selecciona la fila de una MAC. Si está oculta por el filtro, lo quita para poder mostrarla.
+        function marcaFila(mac, desplazar) {
+            macSeleccionada = mac;
+            if (!filasPorMac.has(mac) && porMac.has(mac)) {
+                document.getElementById('search-input').value = '';
+                document.getElementById('insecure-checkbox').checked = false;
+                renderTable(detecciones);
+            }
+            filasPorMac.forEach((tr, m) => tr.classList.toggle('seleccionada', m === mac));
+            const tr = filasPorMac.get(mac);
+            if (tr && desplazar) {
+                tr.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            }
+        }
+
+        // Centra el mapa en la detección y la resalta con un círculo y un popup.
+        // El popup se construye con nodos DOM y textContent, nunca con HTML del SSID.
+        function irAlPunto(d) {
+            const lm = mapaLeaflet();
+            if (!lm) return;
+            const { w, mapa } = lm;
+            const pos = [d.CurrentLatitude, d.CurrentLongitude];
+
+            const contenido = w.document.createElement('div');
+            [['SSID', d.SSID || '(oculta)'], ['MAC', d.MAC], ['Auth', d.AuthMode],
+             ['Channel', d.Channel], ['RSSI', d.RSSI]].forEach(([k, v]) => {
+                const linea = w.document.createElement('div');
+                const b = w.document.createElement('b');
+                b.textContent = k + ': ';
+                linea.appendChild(b);
+                linea.appendChild(w.document.createTextNode(String(v)));
+                contenido.appendChild(linea);
+            });
+
+            if (resaltado) resaltado.remove();
+            resaltado = w.L.circleMarker(pos, {
+                radius: 18, color: '#00e5ff', weight: 3, fill: false
+            }).addTo(mapa);
+            resaltado.bindPopup(contenido, { maxWidth: 1000 });
+            mapa.setView(pos, Math.max(mapa.getZoom(), 18));
+            resaltado.openPopup();
+        }
+
+        // Al pulsar cualquier marcador del mapa (de cualquier capa), selecciona su fila.
+        function enlazaMarcadores() {
+            const lm = mapaLeaflet();
+            if (!lm) return false;
+            Object.entries(enlaceMapa.marcadores || {}).forEach(([nombre, mac]) => {
+                const marcador = lm.w[nombre];
+                if (marcador && marcador.on) {
+                    marcador.on('click', () => marcaFila(mac, true));
+                }
+            });
+            return true;
+        }
+
+        // El iframe puede haber cargado ya antes de que llegue este script
+        const frame = document.getElementById('map-frame');
+        if (!enlazaMarcadores()) {
+            frame.addEventListener('load', enlazaMarcadores, { once: true });
+        }
+  </script>
+</body>
+</html>

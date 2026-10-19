@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fontan"
+version = "0.1.0"
+description = "Mapeo de redes WiFi a partir de capturas de wardriving (WiGLE/Kismet)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = ["folium>=0.19"]
+
+[project.scripts]
+fontan = "wardriving.__main__:main"
+
+[tool.setuptools.package-data]
+wardriving = ["*.html"]
